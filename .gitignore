@@ -1,0 +1,26 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Runtime state -- never commit
+data/
+!data/.gitkeep
+*.db
+*.db-journal
+*.ndjson
+*.ndjson.gz
+
+# Secrets -- never commit
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+.triangulum-live-ack
+
+.DS_Store
