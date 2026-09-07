@@ -1,0 +1,88 @@
+# Triangulum default configuration.
+#
+# Paper mode, one venue, $100. Every value here is a starting point that the
+# `triangulum doctor` output should be used to revise for your account -- in
+# particular the fee overrides, which are the single largest lever on whether
+# any cycle is profitable.
+#
+# Secrets NEVER go in this file. API keys are read from the environment only,
+# and the loader refuses to start if it finds something key-shaped here.
+
+mode: paper
+base_currency: USDT
+initial_capital: 100.0
+
+# The target, tracked and reported. Never used to relax the EV gate.
+daily_target_bps: 100.0
+monthly_target_pct: 30.0
+
+venues:
+  - name: binance
+    enabled: true
+    sandbox: false
+    quote_assets: [USDT, BTC, ETH]
+    max_symbols: 120
+    book_depth: 20
+    # Set these to YOUR account's actual rates from the venue's fee page.
+    # The published entry tier is a guess about your account and it is usually
+    # pessimistic; the gap is larger than any edge this engine looks for.
+    maker_fee_bps: null
+    taker_fee_bps: null
+    fee_discount_asset: BNB
+    max_requests_per_second: 15.0
+
+strategy:
+  triangular_enabled: true
+  polygonal_enabled: true
+  cross_exchange_enabled: false
+  min_cycle_length: 3
+  max_cycle_length: 3
+  start_assets: [USDT]
+  min_gross_edge_bps: 2.0
+  min_net_edge_bps: 1.5
+  max_book_age_ms: 250.0
+  scan_interval_ms: 40.0
+  cycle_cooldown_ms: 750.0
+  max_concurrent_cycles: 1
+
+execution:
+  mode: adaptive
+  cycle_budget_ms: 900.0
+  leg_timeout_ms: 250.0
+  max_book_consumption: 0.35
+  max_levels_to_walk: 8
+  taker_price_offset_ticks: 2
+  capital_fraction_per_cycle: 0.95
+  min_notional_buffer: 1.15
+  unwind_enabled: true
+
+risk:
+  max_daily_loss_pct: 3.0
+  max_drawdown_pct: 10.0
+  max_consecutive_losses: 8
+  max_cycle_notional_pct: 95.0
+  max_orders_per_minute: 120
+  max_cycles_per_minute: 30
+
+learning:
+  enabled: true
+  bandit_enabled: true
+  min_expected_value_bps: 0.5
+  min_samples_before_trust: 200
+  exploration_floor: 0.05
+  model_dir: data/models
+
+dashboard:
+  enabled: true
+  host: 127.0.0.1
+  port: 8787
+
+storage:
+  db_path: data/triangulum.db
+  recording_dir: data/recordings
+  record_opportunities: true
+  record_books: false
+
+ops:
+  log_level: INFO
+  heartbeat_interval_sec: 15.0

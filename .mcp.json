@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "triangulum": {
+      "command": "python3",
+      "args": ["-m", "triangulum.claude.mcp_server"],
+      "env": {
+        "PYTHONPATH": ".",
+        "TRIANGULUM_URL": "http://127.0.0.1:8787"
+      }
+    }
+  }
+}

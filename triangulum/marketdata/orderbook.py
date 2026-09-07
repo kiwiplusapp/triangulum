@@ -207,6 +207,22 @@ class OrderBook:
     def is_fresh(self, now_ns: int, max_age_ns: int) -> bool:
         return self.initialized and self.age_ns(now_ns) <= max_age_ns
 
+    def depth_notional(self, side: Side, levels: int = 5) -> Decimal:
+        """
+        Quote-currency value resting on one side, over the top ``levels``.
+
+        ``side`` is the side you would CONSUME: a BUY eats asks, a SELL eats
+        bids. Used by the planner to estimate how expensive a position would be
+        to unwind, so getting the side backwards would systematically favour
+        exactly the wrong leg ordering.
+        """
+        book_side = self.asks if side is Side.BUY else self.bids
+        return book_side.total_notional(levels)
+
+    def depth_size(self, side: Side, levels: int = 5) -> Decimal:
+        book_side = self.asks if side is Side.BUY else self.bids
+        return book_side.total_size(levels)
+
     # -- mutation ----------------------------------------------------------
 
     def apply_snapshot(

@@ -93,6 +93,7 @@ class LegPlanner:
         mode: ExecutionMode = ExecutionMode.TTT,
         now_ns: int = 0,
         capital_fraction: Decimal = D("0.95"),
+        required_start_asset: Asset | None = None,
     ) -> tuple[CyclePlan | None, SizingResult]:
         """
         Build a plan, or explain why the opportunity is not routable.
@@ -106,7 +107,22 @@ class LegPlanner:
         if not legs:
             return None, SizingResult(failure="no_legs")
 
-        best_order = self._choose_rotation(legs, now_ns)
+        # A cycle is a loop with no intrinsic starting point, but execution has
+        # one: you can only begin from an asset you actually hold. Rotating to
+        # whichever ordering scores best while ignoring the balance produces a
+        # plan that spends BTC an account holding only USDT does not have --
+        # which then fails at the risk check or, worse, at the venue.
+        anchor = required_start_asset or opportunity.start_asset
+        allowed = [
+            i for i, leg in enumerate(legs) if leg.from_asset == anchor
+        ] if anchor else list(range(len(legs)))
+        if not allowed:
+            return None, SizingResult(
+                failure="no_rotation_from_held_asset",
+                detail=f"cycle does not pass through {anchor}",
+            )
+
+        best_order = self._choose_rotation(legs, now_ns, allowed=allowed)
         ordered = legs[best_order:] + legs[:best_order]
         start_asset = ordered[0].from_asset
 
@@ -147,10 +163,13 @@ class LegPlanner:
 
     # -- ordering ----------------------------------------------------------
 
-    def _choose_rotation(self, legs: Sequence[Leg], now_ns: int) -> int:
-        """Score every rotation; return the index to start from."""
+    def _choose_rotation(
+        self, legs: Sequence[Leg], now_ns: int, *, allowed: Sequence[int] | None = None,
+    ) -> int:
+        """Score the permitted rotations; return the index to start from."""
         scores: list[OrderingScore] = []
-        for rotation in range(len(legs)):
+        candidates = allowed if allowed is not None else range(len(legs))
+        for rotation in candidates:
             ordered = list(legs[rotation:]) + list(legs[:rotation])
             fill_risk = self._fill_risk(ordered[0])
             # Unwind cost of the position held after the LAST leg before close.

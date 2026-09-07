@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "triangulum"
+version = "1.0.0"
+description = "Autonomous multi-venue arbitrage engine with online-learning execution gating"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "kiwiplusapp" }]
+keywords = ["arbitrage", "trading", "triangular", "market-making", "crypto"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Programming Language :: Python :: 3.11",
+  "Topic :: Office/Business :: Financial :: Investment",
+]
+
+# The core engine, the backtester and the dashboard run on the standard library
+# alone. That is deliberate: the control plane must come up when the rest of the
+# stack is broken, which is exactly when you need it.
+dependencies = []
+
+[project.optional-dependencies]
+live = ["aiohttp>=3.9", "PyYAML>=6.0"]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.6", "mypy>=1.11"]
+
+[project.scripts]
+triangulum = "triangulum.cli.main:main"
+
+[tool.setuptools.packages.find]
+include = ["triangulum*"]
+
+[tool.setuptools.package-data]
+triangulum = ["dashboard/templates/*.html", "dashboard/static/**/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.ruff]
+line-length = 96
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM"]
+ignore = ["E501", "B008"]

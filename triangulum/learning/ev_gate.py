@@ -39,16 +39,32 @@ samples sigma is large and almost nothing passes; as evidence accumulates sigma
 shrinks and the gate opens. The system is automatically timid when ignorant and
 confident when informed, with no schedule to tune.
 
-THE EXPLORATION FLOOR
-=====================
+THE EXPLORATION FLOOR AND THE COLD-START TRAP
+============================================
 
 A gate that only takes trades it is confident about never learns that it was
 wrong. If the model believes cycles with 200ms book age never fill, it stops
 taking them, receives no more data about them, and can never discover that the
 belief was an artifact of a bad week. A small fraction of marginal trades are
 therefore taken deliberately, sized down, purely to keep the training
-distribution honest. This is the cost of learning, and it is budgeted
-explicitly rather than hidden.
+distribution honest.
+
+There is a sharper version of this problem at startup, and it is a trap the
+uncertainty adjustment above walks straight into if left alone:
+
+    zero samples -> wide sigma -> every lower bound is negative
+                 -> nothing is accepted -> no outcomes observed
+                 -> still zero samples.
+
+The engine sits there forever, correctly cautious and completely useless.
+Measured on the synthetic market: 24 opportunities detected, 10 sized
+successfully, 0 accepted -- 9 of them rejected on uncertainty alone.
+
+The fix is to make the exploration rate a function of ignorance rather than a
+constant. It starts high (the model knows nothing, so information is cheap
+relative to its value) and decays to the configured floor as evidence
+accumulates. Exploration trades are sized down, so the cost of buying that
+information is bounded and explicit.
 """
 
 from __future__ import annotations
@@ -144,6 +160,7 @@ class EVGate:
         min_fill_probability: float = 0.15,
         min_samples_before_trust: int = 200,
         exploration_floor: float = 0.05,
+        cold_start_exploration: float = 0.60,
         exploration_size_multiplier: float = 0.25,
         prior_fill_probability: float = 0.55,
         default_unwind_cost_bps: float = 12.0,
@@ -159,6 +176,7 @@ class EVGate:
         self.min_fill_probability = min_fill_probability
         self.min_samples_before_trust = min_samples_before_trust
         self.exploration_floor = exploration_floor
+        self.cold_start_exploration = cold_start_exploration
         self.exploration_size_multiplier = exploration_size_multiplier
         self.prior_fill_probability = prior_fill_probability
         self.default_unwind_cost_bps = default_unwind_cost_bps
@@ -285,7 +303,7 @@ class EVGate:
         negative-EV trades would be paying for information we already have.
         """
         if decision.expected_value_bps > -self.min_ev_bps and (
-            self._rng.random() < self.exploration_floor
+            self._rng.random() < self.current_exploration_rate
         ):
             self.explorations += 1
             decision.verdict = GateVerdict.ACCEPT_EXPLORATION
@@ -326,6 +344,25 @@ class EVGate:
         # A failure is roughly uniform across legs 1..n-1; the mean position is
         # halfway through, so about half the cycle's cost is already sunk.
         return per_leg_fee * 2 + float(plan.slippage_bps) * 0.5 + self.default_unwind_cost_bps * 0.5
+
+    @property
+    def current_exploration_rate(self) -> float:
+        """
+        Exploration probability, decaying with accumulated evidence.
+
+        Linear from ``cold_start_exploration`` at zero samples to
+        ``exploration_floor`` once the model is trusted. Linear rather than
+        exponential on purpose: the first hundred samples are worth far more
+        than the next thousand, and a linear ramp keeps the rate meaningfully
+        above the floor through exactly that range.
+        """
+        if self.min_samples_before_trust <= 0:
+            return self.exploration_floor
+        progress = min(1.0, self.fill_model.samples / self.min_samples_before_trust)
+        return (
+            self.cold_start_exploration * (1 - progress)
+            + self.exploration_floor * progress
+        )
 
     # -- learning from outcomes -------------------------------------------
 
@@ -378,5 +415,6 @@ class EVGate:
             "slippage_model": self.slippage_model.stats(),
             "calibration": self.calibrator.stats(),
             "trusts_model": self.fill_model.samples >= self.min_samples_before_trust,
+            "exploration_rate": round(self.current_exploration_rate, 4),
             "min_ev_bps": self.min_ev_bps,
         }

@@ -76,10 +76,78 @@ class TriangularStrategy(Strategy):
         self.bellman_ford_extras = 0
 
     def enumerate(self) -> int:
-        """Rebuild cycle templates. Call after the instrument universe changes."""
+        """
+        Rebuild cycle templates. Call after the instrument universe changes.
+
+        A zero result is not a quiet non-event -- it means the engine will
+        never trade, and the operator must be told why. The most common cause
+        at small capital is the lot-value screen: it correctly rejects
+        instruments whose quantization drag exceeds the budget, and at $100
+        that can leave a subgraph with no closed cycles at all. Silently
+        scanning an empty template set forever is the single most confusing
+        failure this system can present, so it explains itself instead.
+        """
         templates = self.enumerator.enumerate()
         self._enumerated = True
+        if not templates:
+            self._explain_empty()
         return len(templates)
+
+    def _explain_empty(self) -> None:
+        stats = self.graph.stats()
+        excluded = stats.get("excluded", {})
+        connectivity = self.graph.connectivity_report()
+
+        logger.warning(
+            "no tradable cycles found. Graph has %s usable edges over %s nodes "
+            "from %s total edges.",
+            stats.get("edges_usable"), stats.get("nodes"), stats.get("edges_total"),
+        )
+        if excluded:
+            ranked = sorted(excluded.items(), key=lambda kv: -kv[1])
+            logger.warning(
+                "  edges excluded by: %s",
+                ", ".join(f"{reason}={count}" for reason, count in ranked),
+            )
+            top_reason = ranked[0][0]
+            if top_reason == "lot_value":
+                logger.warning(
+                    "  The dominant cause is the QUANTIZATION-DRAG SCREEN. At this "
+                    "capital, most instruments' lot grids would cost more in "
+                    "rounding than the cycle could earn. This is the screen working "
+                    "correctly, not a bug."
+                )
+                logger.warning(
+                    "  Options, in order of honesty: (1) raise capital -- drag is "
+                    "inversely proportional to notional; (2) raise "
+                    "strategy.drag_budget_bps to admit more instruments and accept "
+                    "the higher cost; (3) trade only low-lot-value instruments. "
+                    "Run `triangulum doctor` for the numbers."
+                )
+            elif top_reason == "stale":
+                logger.warning(
+                    "  The dominant cause is BOOK STALENESS. Either the feed is "
+                    "lagging or strategy.max_book_age_ms is too tight for this venue."
+                )
+            elif top_reason == "min_notional":
+                logger.warning(
+                    "  The dominant cause is MIN NOTIONAL: the per-leg size is below "
+                    "what the venue will accept. This capital cannot trade these "
+                    "instruments at all."
+                )
+        if connectivity.get("is_star_topology"):
+            logger.warning(
+                "  The surviving graph is a STAR, not a mesh: every asset connects "
+                "only to the quote currency, so no cycle of length >= 3 can exist. "
+                "This is the expected shape for equities and for a heavily-screened "
+                "crypto universe."
+            )
+        elif connectivity.get("nodes_that_can_be_in_a_cycle", 0) < 3:
+            logger.warning(
+                "  Only %s assets have both in- and out-degree >= 2, so no 3-cycle "
+                "can be formed. At least 3 are required.",
+                connectivity.get("nodes_that_can_be_in_a_cycle"),
+            )
 
     def scan(self, now_ns: int) -> list[Opportunity]:
         if not self.enabled:

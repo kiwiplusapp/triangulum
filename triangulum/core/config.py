@@ -150,6 +150,16 @@ class StrategyConfig:
     # is a strong sign the book is stale rather than genuinely mispriced.
     cycle_cooldown_ms: float = 750.0
 
+    # Quantization-drag budget for the instrument screen, in bps per cycle.
+    #
+    # This is the most consequential knob for a small account, and it is a
+    # genuine trade-off with no free answer: a tight budget admits only
+    # low-lot-value instruments and can leave a graph with NO cycles at all,
+    # while a loose one admits BTC- and ETH-anchored cycles whose lot rounding
+    # eats more than the edge. `triangulum doctor` prints both sides.
+    drag_budget_bps: float = 5.0
+    enforce_lot_value_screen: bool = True
+
     max_concurrent_cycles: int = 2
 
 

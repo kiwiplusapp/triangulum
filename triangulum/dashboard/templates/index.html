@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Triangulum</title>
+<link rel="stylesheet" href="/static/css/hud.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>&#9651;</text></svg>">
+</head>
+<body data-palette="#3987e5,#c98500,#199e70,#9085e9">
+
+<header class="topbar">
+  <div class="brand">
+    <svg class="mark" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M12 3 L21.5 20 L2.5 20 Z" fill="none" stroke="currentColor" stroke-width="1.6"/>
+      <circle cx="12" cy="3" r="2.1" fill="currentColor"/>
+      <circle cx="21.5" cy="20" r="2.1" fill="currentColor"/>
+      <circle cx="2.5" cy="20" r="2.1" fill="currentColor"/>
+    </svg>
+    <div>
+      <div class="brand-name">TRIANGULUM</div>
+      <div class="brand-sub" id="brand-sub">arbitrage engine</div>
+    </div>
+  </div>
+
+  <div class="status-strip">
+    <span class="pill" id="pill-mode"><i></i><span>—</span></span>
+    <span class="pill" id="pill-regime"><i></i><span>—</span></span>
+    <span class="pill" id="pill-link"><i></i><span>connecting</span></span>
+  </div>
+
+  <button class="killswitch" id="killswitch" type="button" aria-live="polite">
+    <span class="ks-glyph" aria-hidden="true">◼</span>
+    <span class="ks-label">HALT</span>
+  </button>
+</header>
+
+<main class="grid">
+
+  <!-- ── Hero row ─────────────────────────────────────────────────────── -->
+  <section class="tiles" aria-label="Key figures">
+    <article class="tile">
+      <h2>Equity</h2>
+      <div class="tile-value" id="stat-equity">—</div>
+      <div class="tile-delta" id="stat-equity-delta">—</div>
+    </article>
+    <article class="tile">
+      <h2>Today vs target</h2>
+      <div class="tile-value" id="stat-attainment">—</div>
+      <div class="tile-delta" id="stat-attainment-sub">—</div>
+      <div class="meter" role="img" aria-label="progress toward daily target">
+        <div class="meter-fill" id="meter-target"></div>
+        <div class="meter-target-mark"></div>
+      </div>
+    </article>
+    <article class="tile">
+      <h2>Net edge captured</h2>
+      <div class="tile-value" id="stat-expectancy">—</div>
+      <div class="tile-delta" id="stat-expectancy-sub">per committed cycle</div>
+    </article>
+    <article class="tile">
+      <h2>Cycles</h2>
+      <div class="tile-value" id="stat-cycles">—</div>
+      <div class="tile-delta" id="stat-cycles-sub">—</div>
+    </article>
+    <article class="tile">
+      <h2>Model skill</h2>
+      <div class="tile-value" id="stat-skill">—</div>
+      <div class="tile-delta" id="stat-skill-sub">vs base rate</div>
+    </article>
+    <article class="tile tile-warn" id="tile-drag">
+      <h2>Quantization drag</h2>
+      <div class="tile-value" id="stat-drag">—</div>
+      <div class="tile-delta" id="stat-drag-sub">of gross edge, at this size</div>
+    </article>
+  </section>
+
+  <!-- ── Equity ───────────────────────────────────────────────────────── -->
+  <section class="panel panel-wide" aria-labelledby="h-equity">
+    <div class="panel-head">
+      <h2 id="h-equity">Equity vs target</h2>
+      <div class="legend" id="legend-equity"></div>
+    </div>
+    <div class="canvas-wrap" data-chart="equity">
+      <canvas id="chart-equity"></canvas>
+      <div class="tooltip" id="tip-equity" role="status"></div>
+    </div>
+    <p class="caption" id="caption-equity"></p>
+  </section>
+
+  <!-- ── Currency graph ───────────────────────────────────────────────── -->
+  <section class="panel" aria-labelledby="h-graph">
+    <div class="panel-head">
+      <h2 id="h-graph">Currency graph</h2>
+      <span class="hint" id="graph-hint">—</span>
+    </div>
+    <div class="canvas-wrap canvas-tall" data-chart="graph">
+      <canvas id="chart-graph"></canvas>
+      <div class="tooltip" id="tip-graph" role="status"></div>
+    </div>
+    <p class="caption">Nodes are assets; arcs are tradable conversions. A pulse traces a cycle the detector fired on.</p>
+  </section>
+
+  <!-- ── Decision funnel ──────────────────────────────────────────────── -->
+  <section class="panel" aria-labelledby="h-funnel">
+    <div class="panel-head">
+      <h2 id="h-funnel">Decision funnel</h2>
+      <span class="hint">where opportunities die</span>
+    </div>
+    <div class="funnel" id="funnel"></div>
+    <p class="caption">Each bar is what survived the previous stage. The largest drop is where the engine is actually constrained.</p>
+  </section>
+
+  <!-- ── Edge distribution ────────────────────────────────────────────── -->
+  <section class="panel" aria-labelledby="h-edges">
+    <div class="panel-head">
+      <h2 id="h-edges">Detected edge distribution</h2>
+      <div class="legend" id="legend-edges"></div>
+    </div>
+    <div class="canvas-wrap" data-chart="edges">
+      <canvas id="chart-edges"></canvas>
+      <div class="tooltip" id="tip-edges" role="status"></div>
+    </div>
+    <p class="caption" id="caption-edges"></p>
+  </section>
+
+  <!-- ── Calibration ──────────────────────────────────────────────────── -->
+  <section class="panel" aria-labelledby="h-calib">
+    <div class="panel-head">
+      <h2 id="h-calib">Fill-model calibration</h2>
+      <span class="hint" id="calib-hint">—</span>
+    </div>
+    <div class="canvas-wrap" data-chart="calibration">
+      <canvas id="chart-calibration"></canvas>
+      <div class="tooltip" id="tip-calibration" role="status"></div>
+    </div>
+    <p class="caption">Points on the diagonal mean the stated probability is the real one. Off-diagonal means the expected-value maths is running on a wrong number.</p>
+  </section>
+
+  <!-- ── Bandit ───────────────────────────────────────────────────────── -->
+  <section class="panel" aria-labelledby="h-bandit">
+    <div class="panel-head">
+      <h2 id="h-bandit">Execution arms</h2>
+      <span class="hint">Thompson sampling</span>
+    </div>
+    <div class="table-wrap">
+      <table class="data" id="table-bandit">
+        <caption class="sr-only">Execution configuration performance</caption>
+        <thead><tr><th scope="col">Arm</th><th scope="col">Pulls</th><th scope="col">Fill</th><th scope="col">bps</th><th scope="col">EV</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ── Opportunities ────────────────────────────────────────────────── -->
+  <section class="panel panel-wide" aria-labelledby="h-opps">
+    <div class="panel-head">
+      <h2 id="h-opps">Live decisions</h2>
+      <span class="hint" id="opps-hint">most recent first</span>
+    </div>
+    <div class="table-wrap table-scroll">
+      <table class="data" id="table-opps">
+        <caption class="sr-only">Recent opportunity decisions</caption>
+        <thead><tr>
+          <th scope="col">Path</th><th scope="col">Edge</th><th scope="col">Age</th>
+          <th scope="col">P(fill)</th><th scope="col">EV</th><th scope="col">Verdict</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ── Venues ───────────────────────────────────────────────────────── -->
+  <section class="panel" aria-labelledby="h-venues">
+    <div class="panel-head"><h2 id="h-venues">Venues</h2></div>
+    <div id="venues"></div>
+  </section>
+
+  <!-- ── Risk ─────────────────────────────────────────────────────────── -->
+  <section class="panel" aria-labelledby="h-risk">
+    <div class="panel-head"><h2 id="h-risk">Risk limits</h2></div>
+    <div id="risk-bars"></div>
+  </section>
+
+  <!-- ── Log ──────────────────────────────────────────────────────────── -->
+  <section class="panel panel-wide" aria-labelledby="h-log">
+    <div class="panel-head">
+      <h2 id="h-log">Event stream</h2>
+      <button class="ghost" id="log-clear" type="button">clear</button>
+    </div>
+    <div class="log" id="log" role="log" aria-live="polite"></div>
+  </section>
+
+</main>
+
+<footer class="footer">
+  <span id="footer-note">Paper mode. No capital at risk.</span>
+  <span class="spacer"></span>
+  <a class="ghost" href="/api/state" target="_blank" rel="noopener">raw state</a>
+</footer>
+
+<script src="/static/js/charts.js"></script>
+<script src="/static/js/hud.js"></script>
+</body>
+</html>

@@ -39,7 +39,9 @@ from decimal import Decimal
 from typing import Mapping, Sequence
 
 from triangulum.core.clock import Clock, LatencyBudget, SystemClock
-from triangulum.core.decimal_math import D, ONE, ZERO, bps, floor_to_step, safe_div
+from triangulum.core.decimal_math import (
+    D, ONE, ZERO, bps, floor_to_step, round_price_for_side, safe_div,
+)
 from triangulum.core.errors import OrderRejected, UnwindFailed, VenueError
 from triangulum.core.eventbus import EventBus, Topics
 from triangulum.core.types import (
@@ -91,7 +93,7 @@ class Unwinder:
         *,
         bus: EventBus | None = None,
         clock: Clock | None = None,
-        max_attempts: int = 3,
+        max_attempts: int = 4,
         aggressiveness_ticks: int = 5,
         max_hops: int = 3,
     ) -> None:
@@ -156,13 +158,30 @@ class Unwinder:
 
         for hop_index, leg in enumerate(path):
             filled = False
+            # PARTIAL FILLS ARE NOT SUCCESS.
+            #
+            # An IOC that clears 40% of the position leaves 60% of an unwanted
+            # asset on the books. Treating that as a completed hop -- which an
+            # earlier version of this loop did -- silently abandons the
+            # remainder and then computes the unwind cost by comparing the
+            # partial proceeds against the FULL original value, reporting an
+            # absurd loss (4,214 bps was the observed case) while leaving real
+            # inventory stranded. The loop below keeps working the SAME hop,
+            # with escalating aggression, until the position is flat or the
+            # attempts are exhausted.
+            remaining = running
+            hop_output = ZERO
+            spec = self.sizer.spec_for(leg.symbol)
+
             for attempt in range(self.max_attempts):
                 if budget is not None and budget.expired:
                     logger.error("unwind budget expired at hop %d", hop_index)
                     break
+                if remaining <= 0:
+                    break
                 try:
                     order, received = await self._execute_hop(
-                        leg, running, attempt, cycle_id, hop_index
+                        leg, remaining, attempt, cycle_id, hop_index
                     )
                 except (OrderRejected, VenueError) as exc:
                     logger.warning(
@@ -171,13 +190,45 @@ class Unwinder:
                     await self.clock.sleep(0.05 * (attempt + 1))
                     continue
 
-                if order is not None and order.status.any_fill:
-                    collected.append(_fill_of(order, self.clock.wall_ns()))
-                    running = received
-                    current = leg.to_asset
-                    filled = True
+                if order is None:
+                    # Residual below one lot: dust, not a position. Stop here.
+                    remaining = ZERO
+                    filled = hop_output > 0
                     break
+
+                if order.status.any_fill:
+                    collected.append(_fill_of(order, self.clock.wall_ns()))
+                    hop_output += received
+                    consumed = (
+                        order.filled_quantity * order.average_price
+                        if leg.side is Side.BUY else order.filled_quantity
+                    )
+                    remaining = max(ZERO, remaining - consumed)
+                    if remaining <= spec.lot_step:
+                        remaining = ZERO
+                        filled = True
+                        break
+                    logger.warning(
+                        "unwind hop %d partially filled; %s %s still held, retrying "
+                        "more aggressively",
+                        hop_index, remaining, leg.from_asset.code,
+                    )
                 await self.clock.sleep(0.05 * (attempt + 1))
+
+            if hop_output > 0 and remaining <= 0:
+                filled = True
+            if filled:
+                running = hop_output
+                current = leg.to_asset
+            elif hop_output > 0:
+                # Partially unwound: carry what we recovered, report the rest.
+                running = hop_output
+                logger.critical(
+                    "unwind hop %d incomplete: recovered %s %s but %s %s remains "
+                    "unhedged",
+                    hop_index, hop_output, leg.to_asset.code,
+                    remaining, leg.from_asset.code,
+                )
 
             if not filled:
                 self.unwinds_failed += 1
@@ -186,9 +237,12 @@ class Unwinder:
                     fills=tuple(collected),
                     hops=hop_index,
                     attempts=self.max_attempts,
-                    error=f"hop {hop_index} ({leg}) would not fill",
-                    stranded_asset=current.code,
-                    stranded_amount=running,
+                    error=(
+                        f"hop {hop_index} ({leg}) would not fully fill; "
+                        f"{remaining} {leg.from_asset.code} remains"
+                    ),
+                    stranded_asset=leg.from_asset.code,
+                    stranded_amount=remaining,
                 )
                 # This is the state that must never be silent.
                 self._publish(Topics.KILL_SWITCH, {
@@ -201,10 +255,20 @@ class Unwinder:
                 logger.critical("UNWIND FAILED: %s", result.summary())
                 return result
 
+        # Cost is meaningful only when the whole position was closed. A
+        # partially-closed unwind reports its residual instead of pretending
+        # the shortfall was a price cost.
         cost_bps = (
             bps(safe_div(original_value - running, original_value))
             if original_value > 0 else ZERO
         )
+        if abs(cost_bps) > D("500"):
+            logger.error(
+                "unwind cost of %.0f bps is implausible for a price move -- this "
+                "almost always means the position was not fully closed. "
+                "recovered=%s original_value=%s",
+                float(cost_bps), running, original_value,
+            )
         self.unwinds_succeeded += 1
         self.total_cost_bps += cost_bps
         result = UnwindResult(
@@ -266,11 +330,34 @@ class Unwinder:
             raise VenueError(f"no book for {leg.symbol.key}", venue=leg.venue)
 
         spec = self.sizer.spec_for(leg.symbol)
-        # Escalate aggression with each attempt.
-        ticks = self.aggressiveness_ticks * (attempt + 1)
         touch = book.best_ask if leg.side is Side.BUY else book.best_bid
-        offset = spec.tick_size * D(ticks)
-        price = touch + offset if leg.side is Side.BUY else max(spec.tick_size, touch - offset)
+
+        # Escalate in BASIS POINTS, not ticks.
+        #
+        # A tick is an absolute amount, so "5 ticks through the touch" means
+        # something completely different on ETH at $3050 (0.016%) than on XRP at
+        # $0.54 (0.09%) than on TRX at $0.12 (0.4%). Escalating by ticks meant
+        # the unwinder's "more aggressive" retries on a high-priced instrument
+        # were, in relative terms, indistinguishable from its first attempt --
+        # observed as three failed attempts to sell 0.38 ETH into a book that was
+        # only a few bps away, ending in a stranded position and a halt.
+        #
+        # 25 bps per attempt is deliberately generous. When holding an unwanted
+        # position, the variance per second dwarfs the spread being haggled over.
+        aggression_bps = D(25) * D(attempt + 1)
+        offset = touch * aggression_bps / D(10_000)
+        price = (
+            touch + offset if leg.side is Side.BUY
+            else max(spec.tick_size, touch - offset)
+        )
+        price = round_price_for_side(price, spec.tick_size, leg.side.value)
+
+        # Final attempt: stop haggling and take whatever is there. A limit order
+        # that will not fill is worth less than a worse price on a position we
+        # have already decided to be rid of.
+        last_attempt = attempt >= self.max_attempts - 1
+        order_type = OrderType.MARKET if last_attempt else OrderType.LIMIT
+        time_in_force = TimeInForce.IOC
 
         if leg.side is Side.BUY:
             quantity = floor_to_step(safe_div(amount, price), spec.lot_step)
@@ -290,9 +377,9 @@ class Unwinder:
             symbol=leg.symbol,
             side=leg.side,
             quantity=quantity,
-            order_type=OrderType.LIMIT,
-            price=price,
-            time_in_force=TimeInForce.IOC,
+            order_type=order_type,
+            price=None if order_type is OrderType.MARKET else price,
+            time_in_force=time_in_force,
             client_order_id=f"{cycle_id or new_cycle_tag()}-UW{hop_index}a{attempt}",
             ts_created_ns=self.clock.wall_ns(),
             tag=f"unwind:{cycle_id}",

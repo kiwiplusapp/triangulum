@@ -1,0 +1,3 @@
+# Live venue connectivity. The engine, backtester and dashboard run without these.
+aiohttp>=3.9
+PyYAML>=6.0
