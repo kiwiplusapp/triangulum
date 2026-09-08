@@ -11,6 +11,7 @@ Vault command line.
     vault demo       seed a simulated track record and serve the HUD
     vault signals    every signal's current reading, with provenance
     vault learn      score the signals, fit the models, adopt what earns it
+    vault arb        scan prediction markets for locked arbitrage
     vault simulate   run agents of known skill through the gate
 
 ``score`` is the one that matters. Everything else feeds it.
@@ -73,6 +74,19 @@ def build_parser() -> argparse.ArgumentParser:
     learn_cmd.add_argument("--folds", type=int, default=5)
     learn_cmd.add_argument("--epochs", type=int, default=150)
     learn_cmd.add_argument("--save", default="", help="write the predictor here")
+
+    arb = sub.add_parser(
+        "arb", help="scan prediction markets for locked arbitrage")
+    arb.add_argument("--budget", type=float, default=200.0)
+    arb.add_argument("--venues", default="kalshi,polymarket")
+    arb.add_argument("--kalshi-pages", type=int, default=3)
+    arb.add_argument("--polymarket-limit", type=int, default=18)
+    arb.add_argument("--no-books", action="store_true",
+                     help="skip Polymarket CLOB depth (faster, but nothing "
+                          "found this way is tradeable)")
+    arb.add_argument("--no-cross-venue", action="store_true")
+    arb.add_argument("--show-unlocked", type=int, default=6,
+                     help="how many non-guaranteed candidates to list")
 
     serve = sub.add_parser("serve", help="the HUD")
     serve.add_argument("--port", type=int, default=8899)
@@ -570,7 +584,77 @@ def cmd_learn(args) -> int:
     return 0
 
 
+def cmd_arb(args) -> int:
+    """Scan Kalshi and Polymarket for arbitrage that actually closes."""
+    from vault.markets.arbitrage import scan_groups
+    from vault.markets.venues import KalshiAdapter, PolymarketAdapter
+    from vault.markets.types import Venue
+
+    venues = {v.strip() for v in args.venues.split(",") if v.strip()}
+    groups = []
+    print()
+    if Venue.KALSHI in venues:
+        groups += KalshiAdapter().fetch_groups(pages=args.kalshi_pages)
+        print(f"  kalshi:     {len(groups):5d} groups")
+    before = len(groups)
+    if Venue.POLYMARKET in venues:
+        groups += PolymarketAdapter(
+            fetch_books=not args.no_books
+        ).fetch_groups(limit=args.polymarket_limit)
+        print(f"  polymarket: {len(groups) - before:5d} groups")
+
+    contracts = sum(len(g) for g in groups)
+    exclusive = sum(1 for g in groups if g.mutually_exclusive and len(g) > 1)
+    exhaustive = sum(1 for g in groups if g.is_exhaustive)
+    print(f"  {contracts} contracts, {exclusive} mutually exclusive baskets, "
+          f"{exhaustive} with a provably complete outcome set")
+
+    found = scan_groups(groups, budget=args.budget,
+                        cross_venue=not args.no_cross_venue)
+    locked = [o for o in found if o.locked]
+    unlocked = [o for o in found if not o.locked]
+
+    if args.json:
+        print(json.dumps([o.to_dict() for o in found], indent=2))
+        return 0
+
+    print()
+    print("=" * 74)
+    print(f"  LOCKED ARBITRAGE: {len(locked)}")
+    print("=" * 74)
+    if locked:
+        for opportunity in locked:
+            print()
+            print(opportunity.explain())
+    else:
+        print()
+        print("  None. The arithmetic did not close anywhere, which is the")
+        print("  expected result most of the time -- these venues are watched")
+        print("  and a genuinely risk-free basket does not sit around.")
+
+    if unlocked and args.show_unlocked:
+        print()
+        print("-" * 74)
+        print(f"  {len(unlocked)} CANDIDATE(S) THAT ARE NOT ARBITRAGE")
+        print("-" * 74)
+        print("  Each has positive arithmetic and at least one unverified")
+        print("  assumption. The big returns here are the least real: a basket")
+        print("  paying +700% is one whose outcome list is obviously missing")
+        print("  the case that actually happens.")
+        for opportunity in unlocked[:args.show_unlocked]:
+            print()
+            print(opportunity.explain())
+
+    print()
+    print(f"  budget ${args.budget:,.0f} | fee models are UNVERIFIED -- place")
+    print("  one small order on each venue and read the real fee off the fill")
+    print("  before trusting any net number here.")
+    print()
+    return 0
+
+
 COMMANDS = {
+    "arb": cmd_arb,
     "doctor": cmd_doctor, "scan": cmd_scan, "run": cmd_run,
     "resolve": cmd_resolve, "score": cmd_score, "journal": cmd_journal,
     "serve": cmd_serve, "demo": cmd_demo, "simulate": cmd_simulate,

@@ -171,8 +171,21 @@ _BY_KEY = {spec.key: spec for spec in FRED_SERIES}
 
 
 def _http_get(url: str, *, timeout: float = 25.0) -> bytes:
-    """Fetch through whichever transport can actually reach the network here."""
-    return http_get(url, timeout=timeout, user_agent=_UA)
+    """
+    Fetch through whichever transport can actually reach the network here.
+
+    The User-Agent is deliberately NOT set. It used to be pinned to a polite
+    identifying string, and that string was silently dropped somewhere on the
+    egress path: the identical FRED URL returns 187KB in 2.7s with curl's own
+    UA and times out after 25s with zero bytes when a custom one is sent. It
+    failed as a timeout rather than a 403, so it looked like a flaky network,
+    burned three retries per series, and quietly pushed the whole system onto
+    fixtures.
+
+    `http_get` picks the right default per transport -- urllib needs a UA
+    because its own is widely blocked, curl needs to keep its own.
+    """
+    return http_get(url, timeout=timeout)
 
 
 def fetch_fred(spec: SeriesSpec, *, start: date | None = None) -> Series | None:

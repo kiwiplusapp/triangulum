@@ -37,7 +37,24 @@ logger = logging.getLogger(__name__)
 
 __all__ = ["HttpTransport", "UrllibTransport", "CurlTransport", "get_transport", "http_get"]
 
+# A polite, identifying User-Agent -- used by urllib, whose own default
+# ("Python-urllib/3.x") is blocked by a good number of public data hosts.
 DEFAULT_UA = "Vault/1.0 (macro research)"
+
+# The curl path deliberately sends NO User-Agent override, so curl uses its
+# own ("curl/8.x"). This is not a style preference, it is a measured fix.
+#
+# Against this environment's egress proxy, the same FRED URL fetched with
+# curl's default UA returns 200 and 6,931 bytes, while the identical request
+# carrying either `Vault/1.0 (macro research)` or a Chrome UA string hangs and
+# dies at the timeout with zero bytes received. Something between here and
+# FRED filters on User-Agent and passes only `curl/*`.
+#
+# The failure mode is nasty: a timeout, not a 403. It looks exactly like a
+# flaky network, it burns the full timeout on every retry, and it took the
+# transport probe down with it -- so the whole system silently fell back to
+# fixtures while reporting "no HTTP transport reached the network".
+CURL_SENDS_ITS_OWN_UA = ""
 
 
 class TransportError(Exception):
@@ -96,8 +113,8 @@ class CurlTransport:
     # error, 35 a TLS handshake fault.
     RETRYABLE = frozenset({18, 28, 35, 52, 55, 56, 92})
 
-    def get(self, url: str, *, timeout: float = 25.0, user_agent: str = DEFAULT_UA,
-            attempts: int = 3) -> bytes:
+    def get(self, url: str, *, timeout: float = 25.0,
+            user_agent: str = CURL_SENDS_ITS_OWN_UA, attempts: int = 3) -> bytes:
         if not self.binary:
             raise TransportError("curl is not installed")
 
@@ -115,7 +132,10 @@ class CurlTransport:
                         "--http1.1",
                         "--retry", "0",
                         "--max-time", str(int(timeout)),
-                        "-A", user_agent, url,
+                        # Only override the UA when the caller explicitly asked
+                        # for one. See CURL_SENDS_ITS_OWN_UA above.
+                        *(("-A", user_agent) if user_agent else ()),
+                        url,
                     ],
                     capture_output=True, timeout=timeout + 8,
                 )
@@ -165,7 +185,12 @@ def get_transport(*, force: str = "", probe_timeout: float = 12.0) -> HttpTransp
         if not candidate.available():
             continue
         try:
-            payload = candidate.get(_PROBE_URL, timeout=probe_timeout)
+            payload = (
+                candidate.get(_PROBE_URL, timeout=probe_timeout,
+                              user_agent=DEFAULT_UA)
+                if candidate.name == "urllib"
+                else candidate.get(_PROBE_URL, timeout=probe_timeout)
+            )
         except TransportError as exc:
             logger.info("transport %s failed the probe (%s); trying the next", candidate.name, exc)
             continue
@@ -189,8 +214,20 @@ def get_transport(*, force: str = "", probe_timeout: float = 12.0) -> HttpTransp
     return _selected
 
 
-def http_get(url: str, *, timeout: float = 25.0, user_agent: str = DEFAULT_UA) -> bytes:
-    return get_transport().get(url, timeout=timeout, user_agent=user_agent)
+def http_get(url: str, *, timeout: float = 25.0, user_agent: str = "") -> bytes:
+    """
+    Fetch a URL through whichever transport works here.
+
+    ``user_agent`` defaults to empty, meaning "let the transport decide":
+    urllib sends DEFAULT_UA because its own is widely blocked, curl sends its
+    own because overriding it is what gets the request dropped here.
+    """
+    transport = get_transport()
+    if user_agent:
+        return transport.get(url, timeout=timeout, user_agent=user_agent)
+    if transport.name == "urllib":
+        return transport.get(url, timeout=timeout, user_agent=DEFAULT_UA)
+    return transport.get(url, timeout=timeout)
 
 
 def reset_transport() -> None:

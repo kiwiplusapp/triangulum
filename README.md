@@ -295,6 +295,48 @@ rate at full weight, with the provenance string saying exactly that. Even a
 demonstrably skilful blend is capped — it never fully escapes the base rate on a
 sample this size.
 
+### Prediction-market arbitrage
+
+`vault arb` scans Kalshi and Polymarket for trades whose payoff is arithmetic
+rather than a forecast. This is the one strategy on which $200 is not a
+handicap: capacity is measured in hundreds of dollars, so institutions cannot
+be bothered and there is no latency race to lose.
+
+The scanner is built around one distinction that decides everything:
+
+|  |  |
+|---|---|
+| **Mutually exclusive** | at most one outcome resolves YES |
+| **Exhaustive** | at least one outcome resolves YES |
+
+Kalshi's `mutually_exclusive` and Polymarket's `negRisk` assert the first.
+**Neither asserts the second**, and the two directions of the basket trade
+depend on them differently: selling every outcome pays at least n−1 whether or
+not the list is complete, while buying every outcome pays **zero** if the real
+answer is not on the list.
+
+On a live run over 4,953 contracts it found 8 candidates and locked none of
+them. The largest showed +706% on "What will be the 51st state in Trump's
+term?" — eight outcomes bought for $23.25 against a "guaranteed" $189. The most
+likely outcome is that there is no 51st state, and the basket pays nothing.
+A basket priced far below $1 is evidence that outcomes are missing, not a
+bargain.
+
+Full results, including two structural facts found by reading live data, are in
+[`docs/FINDINGS.md`](docs/FINDINGS.md).
+
+### What 40 years of real data actually says
+
+`vault learn` on real FRED history — 694 non-overlapping 21-day observations
+back to 1981 — earns weight for **0 of 23 signals**, and the base rate beats
+both models out of sample (0.2392 against 0.2444 for the network and 0.2622 for
+logistic regression).
+
+That is a null result, and it is reported as one rather than tuned away. It is
+also honest about its own power: the minimum detectable IC at this sample size
+is 0.116, while real macro signals live at 0.02–0.06. **A genuine signal at the
+top of the published range would still be invisible here.**
+
 ### The console
 
 `web/` is a Next.js console on a board where every panel drags, resizes, hides

@@ -149,6 +149,12 @@ class SignalPerformance:
     mean_return_when_positive: float = 0.0
     mean_return_when_negative: float = 0.0
 
+    # True when the signal reads the very series it is being scored against.
+    # Such a signal is measuring the target's own autocorrelation, which is a
+    # real statistical property and not a forecast.
+    self_referential: bool = False
+    inputs: tuple[str, ...] = ()
+
     weight: float = 0.0
     verdict: str = "untested"
     reason: str = ""
@@ -209,6 +215,8 @@ class SignalPerformance:
             "ic_2x": round(self.ic_2x, 4) if self.ic_2x is not None else None,
             "ic_4x": round(self.ic_4x, 4) if self.ic_4x is not None else None,
             "spread": round(self.spread, 4),
+            "self_referential": self.self_referential,
+            "inputs": list(self.inputs),
             "effective_n": self.effective_n,
             "minimum_detectable_ic": round(self.minimum_detectable_ic, 4),
             "ic_significant": self.ic_significant,
@@ -395,6 +403,8 @@ def score_signal_history(
         performance = SignalPerformance(
             key=spec.key, label=spec.label, family=spec.family,
             horizon_days=horizon_days, n=len(pairs),
+            inputs=tuple(spec.requires),
+            self_referential=target in spec.requires,
         )
 
         if len(pairs) < min_samples:
@@ -492,6 +502,29 @@ def _assign_weight(performance: SignalPerformance) -> None:
     when the measurement is weak.
     """
     ic = performance.ic
+
+    # ---- hurdle -1: is it predicting a series from itself? ----
+    #
+    # A signal computed FROM the target series and scored AGAINST that same
+    # series is measuring autocorrelation. That is a real statistical property
+    # -- volatility genuinely is persistent and mean-reverting -- but it is not
+    # a forecast, and it is not information the market has failed to price.
+    #
+    # This is not hypothetical. Scoring the 23 signals against VIXCLS on 40
+    # years of real data produced exactly three "earning" signals, and all
+    # three read VIX or realised equity vol: vol_regime at IC +0.200 is the
+    # VIX's own mean reversion wearing a signal's clothes. Against NASDAQ100,
+    # where no signal reads the target, nothing passed at all. A scanner that
+    # reported the first result as an edge would be handing over the most
+    # confident-sounding false positive available.
+    if performance.self_referential:
+        performance.verdict = "self-referential"
+        performance.reason = (
+            f"reads {', '.join(performance.inputs)}, which includes the target "
+            f"itself. Any correlation here is the target's own "
+            f"autocorrelation rather than a forecast, and it earns no weight"
+        )
+        return
 
     # ---- hurdle 0: has it taken both sides? ----
     #

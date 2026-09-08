@@ -52,10 +52,18 @@ def make_config(capital: float = 10_000.0, **overrides) -> Config:
     return config
 
 
-# Generous: the unwinder escalates over several attempts and each one awaits a
-# venue round-trip. This is an upper bound on patience, not an expected value --
-# the drain exits as soon as nothing is in flight.
-_DRAIN_MAX_STEPS = 400
+# The drain ceiling must exceed the unwinder's worst-case escalation ladder,
+# and the two constants are coupled: unwind_max_attempts backs off by
+# 0.05 * (attempt + 1) seconds, so eight attempts is 0.05 * (1+2+...+8) = 1.8s
+# per hop, and up to three hops is ~5.4s before a market order finally clears.
+#
+# This was 400 steps (4s) while the ladder was three attempts (~0.6s), which
+# was ample. Raising unwind_max_attempts to 8 without raising this made the
+# drain expire mid-unwind under CPU contention -- the test then reported a
+# stranded cycle that was in fact still being unwound. 1200 steps is 12s,
+# roughly double the worst case, and the loop exits the moment nothing is in
+# flight, so the ceiling costs nothing on a healthy run.
+_DRAIN_MAX_STEPS = 1200
 
 
 async def run_engine(config: Config, *, ticks: int, edge_bps: float = 45.0,

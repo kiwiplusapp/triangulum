@@ -188,7 +188,21 @@ class ExecutionConfig:
     # Unwinding
     unwind_enabled: bool = True
     unwind_aggressiveness_ticks: int = 5
-    unwind_max_attempts: int = 3
+    # Eight, not three.
+    #
+    # An unwind competes for the same liquidity that just refused the cycle's
+    # own leg, so the first attempts often find nothing routable at all. Three
+    # attempts spanning a fraction of a second is not "the position cannot be
+    # closed", it is "the book has not refreshed yet" -- and the difference
+    # matters because failing to unwind trips the kill switch and halts all
+    # trading until a human intervenes.
+    #
+    # Observed: a 709-ADA residual failed every one of three attempts with
+    # ZERO filled (not partial -- unroutable), engaged the kill switch, and
+    # would have been absorbed comfortably once the synthetic book stepped
+    # forward. The escalation ladder already ends in a market order, so more
+    # attempts cost patience rather than price.
+    unwind_max_attempts: int = 8
 
     # Sizing
     capital_fraction_per_cycle: float = 0.95   # of the available start asset
