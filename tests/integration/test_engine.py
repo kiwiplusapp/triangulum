@@ -14,6 +14,7 @@ the synthetic market is generous, which proves nothing.
 from __future__ import annotations
 
 import asyncio
+import tempfile
 
 import pytest
 
@@ -33,12 +34,28 @@ def make_config(capital: float = 10_000.0, **overrides) -> Config:
     )
     config.dashboard.enabled = False
     config.storage.record_opportunities = False
-    config.learning.model_dir = "/tmp/triangulum-test-models"
+    # A FRESH model directory per config, never a shared path.
+    #
+    # The learning stack persists the bandit and the fill model to disk and
+    # reloads the latest version on construction. Pointed at a fixed path,
+    # every engine test inherited whatever the previous test -- and every
+    # previous pytest run, on this machine, ever -- had learned. The directory
+    # was on version 78 when this was found, and the symptom was a ledger
+    # reconciliation that passed when the file ran alone and failed in the
+    # full suite. A backtest whose result depends on leftover files is not a
+    # backtest.
+    config.learning.model_dir = tempfile.mkdtemp(prefix="triangulum-test-models-")
     config.strategy.max_concurrent_cycles = 1
     for key, value in overrides.items():
         section, _, field = key.partition(".")
         setattr(getattr(config, section), field, value) if field else setattr(config, section, value)
     return config
+
+
+# Generous: the unwinder escalates over several attempts and each one awaits a
+# venue round-trip. This is an upper bound on patience, not an expected value --
+# the drain exits as soon as nothing is in flight.
+_DRAIN_MAX_STEPS = 400
 
 
 async def run_engine(config: Config, *, ticks: int, edge_bps: float = 45.0,
@@ -61,9 +78,26 @@ async def run_engine(config: Config, *, ticks: int, edge_bps: float = 45.0,
         # even 400ms ages every book past the 250ms freshness budget, and the
         # graph then correctly reports zero usable edges -- the engine working
         # as designed, but not the state under test.
-        for _ in range(40):
+        #
+        # Drain on the CONDITION, not on a fixed iteration count. The engine's
+        # tasks run on real event-loop time while the market is pumped
+        # synchronously here, so how far a cycle has progressed when the drain
+        # ends depends on how much CPU the process happened to get. A fixed
+        # 400ms drain left a cycle mid-unwind on a loaded machine, which
+        # surfaced as a phantom stranded position or a ledger that disagreed
+        # with the venue by the amount still in flight -- a flaky failure that
+        # blamed the unwinder for the harness's impatience.
+        for _ in range(_DRAIN_MAX_STEPS):
+            if stack.engine.executor.in_flight == 0:
+                break
             stack.market.step()
             await asyncio.sleep(0.01)
+
+        assert stack.engine.executor.in_flight == 0, (
+            f"{stack.engine.executor.in_flight} cycles still in flight after "
+            f"{_DRAIN_MAX_STEPS * 10}ms of draining -- the engine is genuinely "
+            f"stuck, not merely slow"
+        )
         snapshot = stack.engine.snapshot()
     finally:
         await stack.engine.stop()

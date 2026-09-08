@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vault Engine</title>
+<link rel="stylesheet" href="/static/css/vault.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>◈</text></svg>">
+</head>
+<body data-palette="#3987e5,#c98500,#199e70,#9085e9">
+
+<header class="topbar">
+  <div class="brand">
+    <span class="glyph">◈</span>
+    <div>
+      <div class="name">VAULT <span class="sep">//</span> ENGINE</div>
+      <div class="sub" id="brand-sub">macro synthesis · keeping score</div>
+    </div>
+  </div>
+  <div class="chips">
+    <span class="chip" id="chip-mode"><i></i><span>—</span></span>
+    <span class="chip" id="chip-data"><i></i><span>—</span></span>
+    <span class="chip" id="chip-link"><i></i><span>connecting</span></span>
+  </div>
+  <button class="run-btn" id="run-btn" type="button">
+    <span class="dot"></span><span id="run-label">RUN SCAN</span>
+  </button>
+</header>
+
+<div class="fixture-banner" id="fixture-banner" hidden>
+  <strong>FIXTURE DATA.</strong> These series are synthetic, generated locally for
+  demonstration. Nothing here is a reading about the real world.
+</div>
+
+<main class="grid">
+
+  <!-- ═══ THE SCOREBOARD — the hero ═══════════════════════════════════ -->
+  <section class="panel hero" aria-labelledby="h-score">
+    <div class="panel-head">
+      <h2 id="h-score">Track record</h2>
+      <span class="hint" id="score-adequacy">—</span>
+    </div>
+
+    <div class="hero-row">
+      <div class="hero-stat">
+        <div class="hero-label">Resolved calls</div>
+        <div class="hero-value" id="stat-n">0</div>
+        <div class="hero-sub" id="stat-n-sub">nothing scored yet</div>
+      </div>
+      <div class="hero-stat">
+        <div class="hero-label">Hit rate</div>
+        <div class="hero-value" id="stat-hit">—</div>
+        <div class="hero-sub" id="stat-hit-sub">95% CI</div>
+      </div>
+      <div class="hero-stat">
+        <div class="hero-label">Brier <span class="tiny">vs 0.2500</span></div>
+        <div class="hero-value" id="stat-brier">—</div>
+        <div class="hero-sub" id="stat-brier-sub">lower is better</div>
+      </div>
+      <div class="hero-stat">
+        <div class="hero-label">Capital unlocked</div>
+        <div class="hero-value" id="stat-capital">$0</div>
+        <div class="hero-sub" id="stat-capital-sub">gated on calibration</div>
+      </div>
+    </div>
+
+    <p class="caption" id="score-caption">
+      A forecasting system that does not resolve its own calls is not a
+      forecasting system. This panel is the difference.
+    </p>
+  </section>
+
+  <!-- ═══ PIPELINE ════════════════════════════════════════════════════ -->
+  <section class="panel" aria-labelledby="h-pipe">
+    <div class="panel-head"><h2 id="h-pipe">Pipeline</h2><span class="hint" id="pipe-hint">idle</span></div>
+    <ol class="pipeline" id="pipeline">
+      <li data-stage="scan"><span class="node"></span><span class="lbl">SCAN</span></li>
+      <li data-stage="macro"><span class="node"></span><span class="lbl">MACRO</span></li>
+      <li data-stage="flow"><span class="node"></span><span class="lbl">FLOW</span></li>
+      <li data-stage="resolve"><span class="node"></span><span class="lbl">RESOLVE</span></li>
+      <li data-stage="bias"><span class="node"></span><span class="lbl">BIAS</span></li>
+      <li data-stage="gate"><span class="node"></span><span class="lbl">GATE</span></li>
+    </ol>
+    <p class="caption">
+      RESOLVE runs before BIAS: every knowable outcome is graded before the next
+      call is made, so the model's calibration feedback is never a cycle stale.
+    </p>
+  </section>
+
+  <!-- ═══ GATE PROGRESS ═══════════════════════════════════════════════ -->
+  <section class="panel" aria-labelledby="h-gate">
+    <div class="panel-head">
+      <h2 id="h-gate">Capital gate</h2>
+      <span class="hint" id="gate-hint">—</span>
+    </div>
+    <div id="gate-gates"></div>
+    <p class="caption">
+      Position size is a function of demonstrated calibration. Before there is a
+      track record, that function returns zero — not a small number, zero.
+    </p>
+  </section>
+
+  <!-- ═══ REGIME ══════════════════════════════════════════════════════ -->
+  <section class="panel" aria-labelledby="h-regime">
+    <div class="panel-head">
+      <h2 id="h-regime">Regime</h2>
+      <span class="hint" id="regime-conf">—</span>
+    </div>
+    <div class="quadrant" id="quadrant">
+      <div class="q" data-q="goldilocks"><span class="q-name">GOLDILOCKS</span><span class="q-p">—</span></div>
+      <div class="q" data-q="reflation"><span class="q-name">REFLATION</span><span class="q-p">—</span></div>
+      <div class="q" data-q="deflation"><span class="q-name">DEFLATION</span><span class="q-p">—</span></div>
+      <div class="q" data-q="stagflation"><span class="q-name">STAGFLATION</span><span class="q-p">—</span></div>
+      <div class="q-axes" aria-hidden="true">
+        <span class="ax ax-x">inflation →</span>
+        <span class="ax ax-y">growth →</span>
+      </div>
+    </div>
+    <div class="scores">
+      <div><span>growth</span><b id="regime-growth">—</b></div>
+      <div><span>inflation</span><b id="regime-infl">—</b></div>
+    </div>
+    <p class="caption" id="regime-tilt"></p>
+  </section>
+
+  <!-- ═══ RELIABILITY ═════════════════════════════════════════════════ -->
+  <section class="panel" aria-labelledby="h-rel">
+    <div class="panel-head">
+      <h2 id="h-rel">Calibration curve</h2>
+      <div class="legend" id="legend-rel"></div>
+    </div>
+    <div class="canvas-wrap" data-chart="reliability">
+      <canvas id="chart-reliability"></canvas>
+      <div class="tooltip" id="tip-reliability" role="status"></div>
+    </div>
+    <p class="caption">
+      Points on the diagonal mean a stated 70% comes in at 70%. Below it means
+      overconfidence — and the recalibrator corrects for it rather than
+      discarding the forecaster.
+    </p>
+  </section>
+
+  <!-- ═══ CURRENT THESIS ══════════════════════════════════════════════ -->
+  <section class="panel panel-wide" aria-labelledby="h-thesis">
+    <div class="panel-head">
+      <h2 id="h-thesis">Current thesis</h2>
+      <span class="hint" id="thesis-model">—</span>
+    </div>
+    <div id="thesis-card" class="thesis-empty">
+      No thesis yet. Run a scan.
+    </div>
+  </section>
+
+  <!-- ═══ OPEN POSITIONS ══════════════════════════════════════════════ -->
+  <section class="panel" aria-labelledby="h-open">
+    <div class="panel-head"><h2 id="h-open">Open calls</h2><span class="hint" id="open-count">0</span></div>
+    <div class="table-wrap">
+      <table class="data" id="table-open">
+        <caption class="sr-only">Unresolved theses</caption>
+        <thead><tr><th scope="col">Asset</th><th scope="col">Dir</th><th scope="col">P</th><th scope="col">Entry</th><th scope="col">Stop</th><th scope="col">Days</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ═══ SIGNALS ═════════════════════════════════════════════════════ -->
+  <section class="panel" aria-labelledby="h-signals">
+    <div class="panel-head"><h2 id="h-signals">Named signals</h2></div>
+    <ul class="signals" id="signals"><li class="muted">—</li></ul>
+  </section>
+
+  <!-- ═══ HISTORY ═════════════════════════════════════════════════════ -->
+  <section class="panel panel-wide" aria-labelledby="h-history">
+    <div class="panel-head">
+      <h2 id="h-history">Call history</h2>
+      <span class="hint" id="chain-status">—</span>
+    </div>
+    <div class="table-wrap table-scroll">
+      <table class="data" id="table-history">
+        <caption class="sr-only">Resolved and pending theses</caption>
+        <thead><tr>
+          <th scope="col">When</th><th scope="col">Asset</th><th scope="col">Dir</th>
+          <th scope="col">Horizon</th><th scope="col">P</th><th scope="col">Result</th>
+          <th scope="col">Move</th><th scope="col">Brier</th><th scope="col">Regime</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+</main>
+
+<footer class="footer">
+  <span id="footer-note">Paper mode. Calls are real and scored; capital is not at risk.</span>
+  <span class="spacer"></span>
+  <a class="ghost" href="/api/state" target="_blank" rel="noopener">raw state</a>
+</footer>
+
+<script src="/static/js/vault.js"></script>
+</body>
+</html>

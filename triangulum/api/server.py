@@ -45,6 +45,17 @@ _WS_MAGIC = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 _STATIC_ROOT = Path(__file__).parent.parent / "dashboard"
 
 
+def _root_for(dashboard: "DashboardServer") -> Path:
+    """
+    Static root for this server instance.
+
+    A subclass can serve a different UI from the same server by setting
+    ``static_root``; without this the Vault HUD would be served Triangulum's
+    HTML, which fails silently and confusingly (a 200 with the wrong page).
+    """
+    return getattr(dashboard, "static_root", None) or _STATIC_ROOT
+
+
 class WebSocketConnection:
     """One upgraded connection. Text frames only; that is all we send."""
 
@@ -183,7 +194,7 @@ class _Handler(BaseHTTPRequestHandler):
             return self._deny()
 
         if path == "/" or path == "/index.html":
-            return self._serve_file(_STATIC_ROOT / "templates" / "index.html", "text/html")
+            return self._serve_file(_root_for(self.dashboard) / "templates" / "index.html", "text/html")
         if path.startswith("/static/"):
             return self._serve_static(path)
         if path.startswith("/api/"):
@@ -223,8 +234,9 @@ class _Handler(BaseHTTPRequestHandler):
     def _serve_static(self, path: str) -> None:
         relative = path[len("/static/"):]
         # Path traversal guard: resolve and confirm containment.
-        target = (_STATIC_ROOT / "static" / relative).resolve()
-        root = (_STATIC_ROOT / "static").resolve()
+        base = _root_for(self.dashboard)
+        target = (base / "static" / relative).resolve()
+        root = (base / "static").resolve()
         if not str(target).startswith(str(root)) or not target.is_file():
             return self._send_json({"error": "not found"}, status=404)
         content_type = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
@@ -327,6 +339,8 @@ class DashboardServer:
             "/api/logs": lambda: {"lines": self._log_lines[-500:]},
         }
         self.post_routes: dict[str, Callable[[dict], Any]] = {}
+        # Subclasses override this to serve their own UI.
+        self.static_root: Path | None = None
         self.command_handlers: dict[str, Callable[[dict], Any]] = {}
 
     # -- lifecycle ---------------------------------------------------------
