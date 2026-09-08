@@ -191,10 +191,115 @@ portfolio/    Double-entry ledger, FIFO lots, P&L attribution
 backtest/     Metrics, Monte Carlo, replay
 api/ dashboard/  stdlib server + canvas HUD
 claude/       MCP server
+
+vault/                The macro agent, built on the same principles
+  data/               FRED + market series, point-in-time slicing, caching
+  macro/              Growth-inflation regime, curve and cross-asset reads
+  signals/            23 named signals; per-signal scoring that gates weight
+  nn/                 Pure-Python MLP, purged walk-forward, ensemble
+  thesis/             Falsifiable prediction schema + hash-chained journal
+  resolve/            Auto-resolution, Brier, Murphy decomposition
+  calibration/        The capital gate and recalibration
+  hud/                Canvas HUD
+
+web/                  Next.js console: draggable, resizable, near-monochrome
 ```
 
-~21,000 lines of Python. `CLAUDE.md` documents the constraints that look like
-style rules and are not.
+~39,000 lines. `CLAUDE.md` documents the constraints that look like style
+rules and are not.
+
+---
+
+## Vault: the macro agent
+
+Triangulum hunts arbitrage. Vault does something different with the same
+discipline: it makes falsifiable macro calls, grades them automatically, scores
+its own calibration, and derives position size from that score. Before there is
+a track record, the size is zero — not a small number, zero.
+
+```bash
+python3 -m vault --fixtures doctor      # what it can and cannot do right now
+python3 -m vault --fixtures signals     # all 23 signals, with provenance
+python3 -m vault --fixtures learn       # score signals, fit models, adopt what earns it
+python3 -m vault --fixtures simulate    # run agents of known skill through the gate
+python3 -m vault --fixtures demo --learn  # seed a record and serve the HUD
+```
+
+### Signals earn their weight
+
+Twenty-three signals across ten families — curve, inflation, credit, momentum,
+volatility, currency, commodity, labour, liquidity, housing. Each is scored
+independently against forward returns, and a signal with no measured edge is
+weighted **zero**. Fame is not evidence: the yield curve's recession record is a
+fact about the last seventy years, not about whether this implementation of it,
+on this data, at this horizon, predicts anything.
+
+Three hurdles, and the first two exist because of bugs found while testing:
+
+- **Both sides.** A signal that read positive 177 times and negative 0 times has
+  not been tested as a short signal. The first version of the weighting rule
+  tested hit rate against 0.5; equities rose in 84% of the sampled windows, so
+  four permanently-bullish signals were credited with an "84% hit rate" for
+  demonstrating nothing but the market's own drift.
+- **IC significance, not hit rate.** Tested via Fisher's z on the *effective*
+  sample size after deflating for window overlap, at a Bonferroni-adjusted
+  level. Twenty-three signals tested at the usual 95% will hand you one
+  "significant" result from pure noise per twenty tested, every time.
+- **Positive spread**, and no silent sign-flipping of anti-correlated signals.
+
+The scorecard also reports what it *cannot* see. With two years of history at a
+21-day horizon there are ~34 independent observations and the minimum detectable
+IC is about **0.50**, while real macro signals live at 0.02–0.06. The honest
+conclusion is not "no signal works" — it is "this sample cannot see a signal of
+realistic size", and the remedy is decades of history, not a lower threshold.
+
+### The network
+
+A feed-forward network written from scratch in pure Python — forward pass,
+backprop, Adam, dropout, L2, early stopping with weight restoration. About 600
+parameters by default, deliberately.
+
+> On frameworks: there is no neural-network library called Obsidian — Obsidian
+> is a Markdown note-taking app, and the nearest thing by name is ONNX, a model
+> interchange format rather than a training framework. Rather than guess, it is
+> implemented directly. That is also the right call here: NumPy is not installed
+> in this environment and PyTorch would be a 700MB dependency to train 600
+> parameters on a few hundred samples. Everything else in this repo —
+> Bellman-Ford, FTRL, RMSProp, Thompson sampling — is implemented the same way.
+> If the model ever needs to be bigger, the honest move is to swap in PyTorch
+> wholesale, not to grow that file.
+
+Correctness is pinned by XOR, which no linear model can solve, with logistic
+regression as the control.
+
+**The network does not get to be in the ensemble because it is a neural
+network.** It is fitted alongside logistic regression and the base rate on
+identical purged walk-forward folds and judged on the same out-of-sample Brier.
+On synthetic data with known structure the harness reaches all three verdicts
+correctly: no structure → base rate, linear structure → logistic wins,
+interaction structure → network wins. On a few hundred noisy macro samples the
+honest expectation is that the linear model wins or ties, and when it does, the
+system says so and the weights follow.
+
+Splits are chronological, **purged** (training samples whose label window
+overlaps the test block are dropped) and **embargoed**. Scaling is fitted on the
+training fold only. Shuffled k-fold on this data would be wrong in the direction
+that flatters the model.
+
+### The prior
+
+Signals, model and base rate are blended into one probability, with weights
+proportional to how much each beat the base rate out of sample. A source that
+did not beat it gets zero, and when nothing beat it the prediction *is* the base
+rate at full weight, with the provenance string saying exactly that. Even a
+demonstrably skilful blend is capped — it never fully escapes the base rate on a
+sample this size.
+
+### The console
+
+`web/` is a Next.js console on a board where every panel drags, resizes, hides
+and restores, with the arrangement persisted. Near-monochrome by design: eleven
+greys, one cold accent, two desaturated tints for sign. See `web/README.md`.
 
 ---
 

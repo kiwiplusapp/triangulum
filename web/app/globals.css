@@ -1,0 +1,442 @@
+/*
+ * Near-monochrome console.
+ *
+ * The palette is deliberately almost colourless: eleven steps of grey, one
+ * cold accent, and two heavily desaturated tints for sign. Everything that a
+ * more colourful dashboard would encode in hue is encoded here in luminance,
+ * weight and space instead.
+ *
+ * The reason is not taste. A dashboard where twelve things are brightly
+ * coloured has no way left to say "look at this one" -- every element is
+ * already shouting, so the genuinely urgent state cannot be distinguished
+ * from the merely present. Holding almost everything to greyscale means the
+ * accent, used on perhaps two elements per screen, actually directs the eye.
+ */
+
+:root {
+  /* Greys, near-black to near-white. Numbered by lightness so the ramp is
+     obvious at the call site and gaps are visible. */
+  --g0: #08090b;
+  --g1: #0c0e11;
+  --g2: #111318;
+  --g3: #161920;
+  --g4: #1d212a;
+  --g5: #262b36;
+  --g6: #363c49;
+  --g7: #4d5563;
+  --g8: #6b7484;
+  --g9: #9aa3b2;
+  --g10: #c9cfd8;
+  --g11: #eef1f5;
+
+  /* The one accent. Cold, low-saturation, used sparingly. */
+  --accent: #7fd4e8;
+  --accent-dim: #3d6f7d;
+  --accent-glow: rgba(127, 212, 232, 0.14);
+
+  /* Sign, desaturated hard. These are tints of grey, not red and green --
+     enough to separate at a glance, not enough to compete with the accent. */
+  --pos: #7fbfa3;
+  --neg: #c08f8f;
+  --warn: #c4ab7d;
+
+  --bg: var(--g0);
+  --panel: var(--g2);
+  --panel-raised: var(--g3);
+  --line: var(--g5);
+  --line-soft: var(--g4);
+  --text: var(--g11);
+  --text-dim: var(--g9);
+  --text-faint: var(--g8);
+
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Menlo", "Consolas", monospace;
+  --radius: 3px;
+  --grid-unit: 8px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior: none;
+}
+
+/* A faint scan grid. Barely visible, but it gives the surface a sense of
+   being a plane the panels sit on rather than a void they float in. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background-image:
+    linear-gradient(var(--g1) 1px, transparent 1px),
+    linear-gradient(90deg, var(--g1) 1px, transparent 1px);
+  background-size: 48px 48px;
+  opacity: 0.55;
+}
+
+::selection { background: var(--accent-dim); color: var(--g11); }
+
+/* ---- chrome ---- */
+
+.chrome {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 0 18px;
+  height: 48px;
+  background: rgba(8, 9, 11, 0.86);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.mark {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  letter-spacing: 0.16em;
+  font-size: 12px;
+  text-transform: uppercase;
+}
+.mark b { font-weight: 600; color: var(--text); }
+.mark span { color: var(--text-faint); letter-spacing: 0.1em; }
+
+.chrome-meta {
+  display: flex;
+  gap: 18px;
+  margin-left: auto;
+  align-items: center;
+  color: var(--text-faint);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  border: 1px solid var(--line);
+  border-radius: 100px;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.pill i {
+  width: 5px; height: 5px; border-radius: 50%;
+  background: var(--g7); display: block;
+}
+.pill[data-live="true"] i { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+.pill[data-live="false"] i { background: var(--neg); }
+
+.btn {
+  font: inherit;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 5px 12px;
+  cursor: pointer;
+  transition: border-color 120ms, color 120ms, background 120ms;
+}
+.btn:hover { color: var(--text); border-color: var(--g7); background: var(--g3); }
+.btn:active { background: var(--g4); }
+.btn[data-accent="true"] { color: var(--accent); border-color: var(--accent-dim); }
+.btn[data-accent="true"]:hover { background: var(--accent-glow); }
+
+/* ---- board ---- */
+
+.board {
+  position: relative;
+  z-index: 1;
+  padding: 16px;
+  min-height: calc(100vh - 48px);
+}
+
+.board[data-dragging="true"] { cursor: grabbing; user-select: none; }
+
+/* The alignment grid, shown only while something is being moved. Persistent
+   grid lines are visual noise; grid lines that appear exactly when you are
+   positioning something are an instrument. */
+.board::after {
+  content: "";
+  position: absolute;
+  inset: 16px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 140ms;
+  background-image:
+    linear-gradient(90deg, var(--g4) 1px, transparent 1px),
+    linear-gradient(var(--g4) 1px, transparent 1px);
+  background-size: var(--col-w) var(--row-h);
+}
+.board[data-dragging="true"]::after { opacity: 0.5; }
+
+.panel {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  background: linear-gradient(180deg, var(--panel-raised), var(--panel));
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  overflow: hidden;
+  transition: border-color 140ms, box-shadow 140ms;
+}
+.panel:hover { border-color: var(--line); }
+.panel[data-active="true"] {
+  border-color: var(--accent-dim);
+  box-shadow: 0 0 0 1px var(--accent-glow), 0 18px 40px rgba(0, 0, 0, 0.55);
+  z-index: 30;
+}
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 10px 0 12px;
+  height: 30px;
+  flex: 0 0 30px;
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--g3);
+  cursor: grab;
+  user-select: none;
+}
+.panel-head:active { cursor: grabbing; }
+
+.panel-title {
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.panel-badge {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--text-faint);
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+}
+
+.panel-grip {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  opacity: 0.35;
+}
+.panel-grip i { width: 9px; height: 1px; background: var(--g9); display: block; }
+
+.panel-body {
+  flex: 1 1 auto;
+  overflow: auto;
+  padding: 12px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--g5) transparent;
+}
+.panel-body::-webkit-scrollbar { width: 8px; height: 8px; }
+.panel-body::-webkit-scrollbar-thumb { background: var(--g5); border-radius: 4px; }
+.panel-body::-webkit-scrollbar-track { background: transparent; }
+
+.resize {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+  z-index: 5;
+}
+.resize::after {
+  content: "";
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 7px;
+  height: 7px;
+  border-right: 1px solid var(--g7);
+  border-bottom: 1px solid var(--g7);
+}
+
+/* ---- content primitives ---- */
+
+.metric { display: flex; flex-direction: column; gap: 2px; }
+.metric-label {
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.metric-value {
+  font-size: 30px;
+  line-height: 1.1;
+  font-weight: 300;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+.metric-sub { font-size: 11px; color: var(--text-faint); }
+
+.metric-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 18px;
+}
+
+.rule { height: 1px; background: var(--line-soft); margin: 12px 0; }
+
+.note {
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-faint);
+}
+
+table { width: 100%; border-collapse: collapse; font-size: 11px; }
+th {
+  text-align: left;
+  font-weight: 400;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  padding: 0 8px 6px 0;
+  border-bottom: 1px solid var(--line-soft);
+  position: sticky;
+  top: -12px;
+  background: var(--panel);
+}
+td {
+  padding: 5px 8px 5px 0;
+  border-bottom: 1px solid var(--g3);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+tr:hover td { color: var(--text); background: var(--g3); }
+td.num { text-align: right; }
+
+.pos { color: var(--pos); }
+.neg { color: var(--neg); }
+.warn { color: var(--warn); }
+.accent { color: var(--accent); }
+.dim { color: var(--text-faint); }
+
+/* Horizontal bar, drawn from the centre so sign reads as direction. */
+.bipolar {
+  position: relative;
+  height: 4px;
+  background: var(--g4);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.bipolar i {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: var(--g8);
+}
+.bipolar b {
+  position: absolute;
+  left: 50%;
+  top: -2px;
+  bottom: -2px;
+  width: 1px;
+  background: var(--g6);
+}
+
+.gate { display: flex; flex-direction: column; gap: 10px; }
+.gate-row { display: flex; flex-direction: column; gap: 4px; }
+.gate-line { display: flex; align-items: baseline; gap: 8px; font-size: 11px; }
+.gate-line b { font-weight: 400; color: var(--text-dim); }
+.gate-line span { margin-left: auto; font-variant-numeric: tabular-nums; }
+.gate-track { height: 2px; background: var(--g4); }
+.gate-track i { display: block; height: 100%; background: var(--g7); }
+.gate-row[data-passed="true"] .gate-track i { background: var(--accent); }
+.gate-row[data-passed="true"] b { color: var(--text); }
+
+.quad { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.quad-cell {
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.quad-cell[data-on="true"] {
+  border-color: var(--accent-dim);
+  background: var(--accent-glow);
+}
+.quad-name {
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.quad-value { font-size: 18px; font-weight: 300; font-variant-numeric: tabular-nums; }
+
+.empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  min-height: 60px;
+  color: var(--text-faint);
+  font-size: 11px;
+  text-align: center;
+  padding: 12px;
+  line-height: 1.7;
+}
+
+.banner {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--warn);
+  border-radius: var(--radius);
+  background: var(--g2);
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-dim);
+  margin-bottom: 14px;
+}
+.banner b { color: var(--warn); font-weight: 500; letter-spacing: 0.08em; }
+
+.tray {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 12px 16px 20px;
+  position: relative;
+  z-index: 1;
+}
+.chip {
+  font: inherit;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  background: var(--g2);
+  border: 1px dashed var(--line);
+  border-radius: 100px;
+  padding: 4px 11px;
+  cursor: pointer;
+}
+.chip:hover { color: var(--accent); border-color: var(--accent-dim); }

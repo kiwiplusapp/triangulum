@@ -30,7 +30,11 @@ from vault.data.sources import FRED_SERIES, DataHub
 from vault.macro.features import build_brief
 from vault.macro.regime import RegimeRead, classify_regime
 from vault.resolve.resolver import ResolutionReport, Resolver
+from vault.nn.ensemble import Prediction, Predictor
+from vault.nn.pipeline import LearningResult, learn
 from vault.resolve.scoring import CalibrationScore, score_records
+from vault.signals.library import evaluate_all
+from vault.signals.types import SignalReading
 from vault.thesis.engine import ThesisEngine, ThesisResult
 from vault.thesis.journal import ThesisJournal
 from vault.thesis.schema import TradeableAsset
@@ -56,6 +60,8 @@ class RunResult:
     recalibration: RecalibrationReport | None = None
     thesis: ThesisResult | None = None
     sizing: SizingDecision | None = None
+    signals: list[SignalReading] = field(default_factory=list)
+    prior: Prediction | None = None
     errors: list[str] = field(default_factory=list)
 
     def summary(self) -> str:
@@ -71,6 +77,14 @@ class RunResult:
                 f"{self.score.hit_rate:.1%}, Brier {self.score.brier:.4f}, "
                 f"{self.score.adequacy}"
             )
+        if self.prior:
+            lines.append(
+                f"  prior:    P(up) {self.prior.probability:.3f} vs base rate "
+                f"{self.prior.base_rate:.3f} ({self.prior.confidence})"
+            )
+        if self.signals:
+            usable = sum(1 for s in self.signals if s.usable)
+            lines.append(f"  signals:  {usable}/{len(self.signals)} usable")
         if self.thesis:
             lines.append(f"  thesis:   {self.thesis.summary()}")
         if self.sizing:
@@ -90,6 +104,8 @@ class RunResult:
             "recalibration": self.recalibration.to_dict() if self.recalibration else None,
             "thesis": self.thesis.to_dict() if self.thesis else None,
             "sizing": self.sizing.to_dict() if self.sizing else None,
+            "signals": [s.to_dict() for s in self.signals],
+            "prior": self.prior.to_dict() if self.prior else None,
             "errors": self.errors,
         }
 
@@ -130,6 +146,11 @@ class Vault:
         self.last_run: RunResult | None = None
         self.runs = 0
         self.stage = "idle"
+
+        # Starts untrained, which means every prior it produces is the base
+        # rate. `vault learn` fits it; nothing here assumes it has been.
+        self.predictor = Predictor()
+        self.learning: LearningResult | None = None
 
     # -- stages ------------------------------------------------------------
 
@@ -268,6 +289,22 @@ class Vault:
             self.stage = "idle"
             return result
 
+        # FLOW: the signal readings, and the quantitative prior built from
+        # whichever of them have demonstrated an edge. On an untrained
+        # predictor the prior IS the base rate, which is the honest default
+        # and costs nothing.
+        self.stage = "flow"
+        try:
+            result.signals = evaluate_all(self.series)
+            result.prior = self.predictor.predict(self.series)
+            result.brief["prior"] = result.prior.to_dict()
+            result.brief["signals"] = [
+                s.to_dict() for s in result.signals if s.usable
+            ]
+        except Exception as exc:
+            result.errors.append(f"signal evaluation failed: {exc}")
+            logger.exception("signal evaluation failed")
+
         # BIAS
         self.stage = "bias"
         if not self.engine.has_credentials and not self.engine.dry_run:
@@ -308,6 +345,33 @@ class Vault:
         self.last_run = result
         return result
 
+    def learn(
+        self, *, target: str = "SP500", horizon_days: int = 21,
+        step_days: int = 5, lookback_days: int = 2000, folds: int = 5,
+        epochs: int = 150,
+    ) -> LearningResult:
+        """
+        Score every signal, fit the models, and adopt whatever earned its way in.
+
+        Safe to call on an untrained system and safe to call repeatedly: if
+        nothing clears the bars, the predictor is left producing the base rate
+        and the report says which hurdle each candidate failed.
+        """
+        if not self.series:
+            self.scan()
+        self.stage = "learn"
+        try:
+            result = learn(
+                self.series, target=target, horizon_days=horizon_days,
+                step_days=step_days, lookback_days=lookback_days,
+                folds=folds, epochs=epochs,
+            )
+            self.predictor = result.predictor
+            self.learning = result
+            return result
+        finally:
+            self.stage = "idle"
+
     # -- state -------------------------------------------------------------
 
     def snapshot(self) -> dict[str, Any]:
@@ -336,6 +400,22 @@ class Vault:
                 if self.last_run and self.last_run.regime else None
             ),
             "brief": self.last_run.brief if self.last_run else {},
+            "signals": [
+                s.to_dict() for s in (
+                    self.last_run.signals if self.last_run
+                    else evaluate_all(self.series) if self.series else []
+                )
+            ],
+            "prior": (
+                self.last_run.prior.to_dict()
+                if self.last_run and self.last_run.prior else None
+            ),
+            "predictor": {
+                "summary": self.predictor.summary(),
+                "model_kind": self.predictor.model_kind,
+                "trained": self.learning is not None,
+            },
+            "learning": self.learning.to_dict() if self.learning else None,
             "last_run": self.last_run.to_dict() if self.last_run else None,
             "open_positions": [
                 {

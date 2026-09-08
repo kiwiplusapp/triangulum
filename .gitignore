@@ -7,9 +7,16 @@ venv/
 .mypy_cache/
 .ruff_cache/
 
-# Runtime state -- never commit
-data/
-!data/.gitkeep
+# Runtime state -- never commit.
+#
+# ANCHORED to the repo root with a leading slash. A bare `data/` matches at
+# every depth, which silently excluded the whole `vault/data/` package -- the
+# series, cache, fetchers and fixtures the rest of the system is built on --
+# from a commit that otherwise looked complete. Nothing warns you: `git status`
+# is clean, the push succeeds, and the repository is simply broken for anyone
+# who clones it.
+/data/
+!/data/.gitkeep
 *.db
 *.db-journal
 *.ndjson
@@ -24,3 +31,10 @@ data/
 .triangulum-live-ack
 
 .DS_Store
+
+# Web console
+web/node_modules/
+web/.next/
+web/out/
+web/next-env.d.ts
+web/tsconfig.tsbuildinfo

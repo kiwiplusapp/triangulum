@@ -9,6 +9,8 @@ Vault command line.
     vault journal    inspect and verify the hash chain
     vault serve      the HUD
     vault demo       seed a simulated track record and serve the HUD
+    vault signals    every signal's current reading, with provenance
+    vault learn      score the signals, fit the models, adopt what earns it
     vault simulate   run agents of known skill through the gate
 
 ``score`` is the one that matters. Everything else feeds it.
@@ -58,6 +60,20 @@ def build_parser() -> argparse.ArgumentParser:
     journal = sub.add_parser("journal", help="inspect and verify the hash chain")
     journal.add_argument("--full", action="store_true")
 
+    signals = sub.add_parser("signals", help="every signal's current reading")
+    signals.add_argument("--all", action="store_true",
+                         help="include unusable signals and their reasons")
+
+    learn_cmd = sub.add_parser(
+        "learn", help="score the signals, fit the models, adopt what earns it")
+    learn_cmd.add_argument("--target", default="SP500")
+    learn_cmd.add_argument("--horizon", type=int, default=21)
+    learn_cmd.add_argument("--step", type=int, default=5)
+    learn_cmd.add_argument("--lookback", type=int, default=2000)
+    learn_cmd.add_argument("--folds", type=int, default=5)
+    learn_cmd.add_argument("--epochs", type=int, default=150)
+    learn_cmd.add_argument("--save", default="", help="write the predictor here")
+
     serve = sub.add_parser("serve", help="the HUD")
     serve.add_argument("--port", type=int, default=8899)
     serve.add_argument("--host", default="127.0.0.1")
@@ -68,6 +84,10 @@ def build_parser() -> argparse.ArgumentParser:
     demo.add_argument("--agent", default="oracle",
                       choices=["oracle", "coinflip", "overconfident", "lucky"])
     demo.add_argument("--no-serve", action="store_true")
+    demo.add_argument("--learn", action="store_true",
+                      help="also run the signal scorecard and model training, "
+                           "so every panel has real numbers behind it")
+    demo.add_argument("--horizon", type=int, default=10)
 
     simulate = sub.add_parser("simulate", help="agents of known skill through the gate")
     # 300, not 200: against the always-valid bound a true 65% forecaster needs
@@ -337,6 +357,17 @@ def cmd_demo(args) -> int:
     vault = _vault(args, dry_run=True)
     vault.use_fixtures = True
     vault.scan()
+
+    if args.learn:
+        print("  scoring signals and fitting models (this takes a moment)...")
+        learned = vault.learn(
+            horizon_days=args.horizon, step_days=5, lookback_days=880, epochs=80,
+        )
+        print(f"  {len(learned.scorecard.earning)} of "
+              f"{len(learned.scorecard.performances)} signals earning weight; "
+              f"model verdict: {learned.training.winner}")
+        print()
+
     vault.run(commit=False)
     server = VaultServer(vault, port=args.port)
     server.start()
@@ -446,10 +477,104 @@ def cmd_simulate(args) -> int:
     return 0 if not failures else 1
 
 
+def cmd_signals(args) -> int:
+    """Every signal's reading right now, with provenance."""
+    from vault.signals.library import evaluate_all
+
+    vault = _vault(args, dry_run=True)
+    vault.scan()
+    readings = evaluate_all(vault.series)
+
+    if args.json:
+        print(json.dumps([r.to_dict() for r in readings], indent=2))
+        return 0
+
+    usable = [r for r in readings if r.usable]
+    print()
+    print(f"  {len(usable)} of {len(readings)} signals usable "
+          f"({vault.data_mode} data)")
+    print()
+    print(f"  {'signal':24s} {'family':11s} {'strength':>9s} {'conf':>5s} "
+          f"{'stance':9s} reading")
+    print("  " + "-" * 110)
+
+    for reading in readings:
+        if not reading.usable and not args.all:
+            continue
+        if reading.usable:
+            bar_len = int(abs(reading.strength) * 10)
+            bar = ("+" if reading.strength > 0 else "-") * bar_len
+            print(f"  {reading.key:24s} {reading.family:11s} "
+                  f"{reading.strength:+9.3f} {reading.confidence:5.2f} "
+                  f"{reading.stance:9s} {bar}")
+            print(f"  {'':24s} {'':11s} {'':>9s} {'':>5s} {'':9s} "
+                  f"{reading.note[:70]}")
+        else:
+            print(f"  {reading.key:24s} {reading.family:11s} "
+                  f"{'--':>9s} {'--':>5s} {'UNUSABLE':9s} "
+                  f"{reading.unavailable_reason[:60]}")
+
+    if not args.all:
+        hidden = len(readings) - len(usable)
+        if hidden:
+            print()
+            print(f"  {hidden} unusable signal(s) hidden; --all shows them "
+                  f"and why")
+
+    composite = sum(r.weighted_strength for r in usable)
+    print()
+    print(f"  Unweighted composite: {composite:+.3f} across {len(usable)} "
+          f"signals.")
+    print("  This is NOT a forecast. It is the average of readings that have")
+    print("  not been individually validated -- run `vault learn` to find out")
+    print("  which of them, if any, has ever predicted anything.")
+    print()
+    return 0
+
+
+def cmd_learn(args) -> int:
+    """Score signals, fit models, and report what survived."""
+    vault = _vault(args, dry_run=True)
+    vault.scan()
+
+    print()
+    print(f"  Learning against {args.target} at a {args.horizon}-day horizon, "
+          f"{args.lookback} days of history.")
+    print("  Every signal is scored independently; the network and a linear")
+    print("  baseline are fitted on purged walk-forward folds; whichever beats")
+    print("  the base rate out of sample is what gets used.")
+    print()
+
+    result = vault.learn(
+        target=args.target, horizon_days=args.horizon, step_days=args.step,
+        lookback_days=args.lookback, folds=args.folds, epochs=args.epochs,
+    )
+
+    if args.json:
+        print(json.dumps(result.to_dict(), indent=2))
+        return 0
+
+    print(result.report())
+    print()
+
+    prediction = result.predictor.predict(vault.series)
+    print("  Current prior:")
+    for line in prediction.explain().splitlines():
+        print(f"  {line}")
+    print()
+
+    if args.save:
+        result.predictor.save(args.save)
+        print(f"  predictor written to {args.save}")
+        print()
+    return 0
+
+
 COMMANDS = {
     "doctor": cmd_doctor, "scan": cmd_scan, "run": cmd_run,
     "resolve": cmd_resolve, "score": cmd_score, "journal": cmd_journal,
     "serve": cmd_serve, "demo": cmd_demo, "simulate": cmd_simulate,
+    "signals": cmd_signals, "learn": cmd_learn,
 }
 
 

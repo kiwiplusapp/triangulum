@@ -41,7 +41,10 @@ class VaultServer(DashboardServer):
         self.get_routes["/api/brief"] = lambda: (
             vault.last_run.brief if vault.last_run else {}
         )
+        self.get_routes["/api/signals"] = self._signals
+        self.get_routes["/api/learning"] = self._learning
         self.post_routes["/api/run"] = self._run
+        self.post_routes["/api/learn"] = self._learn
 
     def _run(self, _body: dict) -> dict[str, Any]:
         """
@@ -58,6 +61,55 @@ class VaultServer(DashboardServer):
             return result.to_dict()
         except Exception as exc:
             logger.exception("run failed")
+            return {"error": f"{type(exc).__name__}: {exc}"}
+        finally:
+            self._run_lock.release()
+
+    def _signals(self) -> dict[str, Any]:
+        from vault.signals.library import evaluate_all
+
+        if not self.vault.series:
+            self.vault.scan()
+        readings = evaluate_all(self.vault.series)
+        return {
+            "usable": sum(1 for r in readings if r.usable),
+            "total": len(readings),
+            "signals": [r.to_dict() for r in readings],
+        }
+
+    def _learning(self) -> dict[str, Any]:
+        if self.vault.learning is None:
+            return {
+                "trained": False,
+                "reason": (
+                    "nothing learned yet -- POST /api/learn, or run "
+                    "`vault learn`, to score the signals and fit the models"
+                ),
+            }
+        return {"trained": True, **self.vault.learning.to_dict()}
+
+    def _learn(self, body: dict) -> dict[str, Any]:
+        """
+        Fit the signal scorecard and the models.
+
+        Behind the same lock as a run: learning replaces the predictor the
+        run path reads, and interleaving the two would let a cycle size a
+        call against a half-swapped model.
+        """
+        if not self._run_lock.acquire(blocking=False):
+            return {"error": "a run or a learning pass is already in progress"}
+        try:
+            result = self.vault.learn(
+                target=str(body.get("target", "SP500")),
+                horizon_days=int(body.get("horizon_days", 21)),
+                step_days=int(body.get("step_days", 5)),
+                lookback_days=int(body.get("lookback_days", 2000)),
+                folds=int(body.get("folds", 5)),
+                epochs=int(body.get("epochs", 150)),
+            )
+            return result.to_dict()
+        except Exception as exc:
+            logger.exception("learning failed")
             return {"error": f"{type(exc).__name__}: {exc}"}
         finally:
             self._run_lock.release()
